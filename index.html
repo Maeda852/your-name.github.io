@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>出社チェック</title>
+  <title>出社フォーム＋Googleフォーム事前入力対応</title>
   <style>
     body { font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Segoe UI", Roboto, "Noto Sans JP"; padding:16px; max-width:640px; margin:auto; }
     h1 { font-size:20px; margin-bottom:8px; }
@@ -20,93 +20,117 @@
   <input list="namelist" id="nameInput" placeholder="例：山田太郎" autocomplete="off" />
   <datalist id="namelist"></datalist>
 
-  <button id="submitBtn">送信</button>
+  <div id="idcardContainer" style="margin-top:8px; display:none;">
+    <label>IDカード番号（任意入力可）:</label>
+    <input type="text" id="idcardInput" placeholder="IDカード番号" />
+  </div>
+
+  <button id="submitBtn">部署確認・次へ</button>
 
   <div id="result"></div>
   <div class="note">※ 名簿はスプレッドシートで毎日更新してください。</div>
 
-  <!-- CSV を安全にパースするためのライブラリ（CDN） -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js"></script>
 
   <script>
-    // ---------- ここに Google スプレッドシートの CSV 公開 URL を貼る ----------
-    const csvUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpGDiZD4OrEiEzIh4DMRN0eFbHkBGZSnxewenjI-jnTstC1U07dQ0mfvNBM5KW9M88tL5fqQ8fyLWy/pub?output=csv";
-    // -------------------------------------------------------------------------
+    const csvUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpGDiZD4OrEiEzIh4DMRN0eFbHkBGZSnxewenjI-jnTstC1U07dQ0mfvNBM5KW9M88tL5fqQ8fyLWy/pubhtml"; 
+    const googleFormBaseUrl = "https://docs.google.com/forms/d/e/1FAIpQLSfCHO8Ic_LePLxIXwTunyZGOh6WH2heDERT0ycrCDUUO0mUBg/viewform?usp=pp_url&entry.1288388977="; 
+    // googleFormBaseUrl の末尾は氏名用entryパラメータまで含めておく
+    // 例: "https://docs.google.com/forms/d/e/FORM_ID/viewform?usp=pp_url&entry.123456="
 
-    let employees = []; // [{name: "...", department: "..."}]
+    // 各Googleフォーム欄のentry番号
+    const entryIdCard = "352252719";   // IDカード番号欄
+    const entryDepartment = "1018926610"; // 部署欄
 
-    // 名前の正規化（前後スペース削除、小文字化）
-    function normalizeName(s){
-      return (s || "").trim().toLowerCase();
-    }
+    let employees = [];
 
-    // CSV を取得して datalist を作る
+    function normalizeName(s){ return (s||"").trim().toLowerCase(); }
+
     function loadCsv(){
       fetch(csvUrl)
-        .then(r => {
-          if(!r.ok) throw new Error("CSVを取得できませんでした: " + r.status);
-          return r.text();
-        })
-        .then(text => {
-          const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
-          employees = parsed.data.map(row => ({
+        .then(r=>r.text())
+        .then(text=>{
+          const parsed = Papa.parse(text,{header:true, skipEmptyLines:true});
+          employees = parsed.data.map(row=>({
             name: row.name ? row.name.trim() : "",
-            department: row.department ? row.department.trim() : ""
-          })).filter(e => e.name);
+            department: row.department ? row.department.trim() : "",
+            idcard: row.idcard ? row.idcard.trim() : ""
+          })).filter(e=>e.name);
 
-          // datalist に選択肢を追加（重複排除）
           const seen = new Set();
           const dl = document.getElementById("namelist");
-          dl.innerHTML = "";
-          employees.forEach(e => {
-            const n = e.name;
-            if(!seen.has(n)){
-              seen.add(n);
+          dl.innerHTML="";
+          employees.forEach(e=>{
+            if(!seen.has(e.name)){
+              seen.add(e.name);
               const opt = document.createElement("option");
-              opt.value = n;
+              opt.value = e.name;
               dl.appendChild(opt);
             }
           });
         })
-        .catch(err => {
-          document.getElementById("result").textContent = "データの読み込みでエラーが発生しました。";
+        .catch(err=>{
+          document.getElementById("result").textContent="データ読み込みエラー";
           console.error(err);
         });
     }
 
-    // 検索して結果を表示（同名が複数あれば全部表示）
     function searchDept(){
       const raw = document.getElementById("nameInput").value || "";
       const nameNormalized = normalizeName(raw);
       if(!nameNormalized){
-        document.getElementById("result").textContent = "氏名を入力してください。";
-        return;
+        document.getElementById("result").textContent="氏名を入力してください";
+        document.getElementById("idcardContainer").style.display="none";
+        return null;
       }
 
-      // 大文字小文字・余白を無視して比較
-      const matches = employees.filter(e => normalizeName(e.name) === nameNormalized);
+      const matches = employees.filter(e=>normalizeName(e.name)===nameNormalized);
+      if(matches.length===0){
+        document.getElementById("result").textContent="該当する氏名が見つかりません";
+        document.getElementById("idcardContainer").style.display="none";
+        return null;
+      }
 
-      if(matches.length === 0){
-        document.getElementById("result").textContent = "該当する氏名が見つかりません。入力を確認してください。";
-      } else if(matches.length === 1){
-        document.getElementById("result").textContent = `${matches[0].name} さんの配置部署は 【${matches[0].department}】 です。`;
+      let emp = matches[0];
+      const deps = matches.length>1 ? [...new Set(matches.map(m=>m.department))].join(" / ") : emp.department;
+      document.getElementById("result").textContent = `${emp.name} さんの配置部署: 【${deps}】`;
+
+      const idInput = document.getElementById("idcardInput");
+      if(emp.idcard){ 
+        idInput.value = emp.idcard; 
+        idInput.readOnly = true;
       } else {
-        // 同名が複数ある場合は一覧表示
-        const deps = [...new Set(matches.map(m => m.department))];
-        document.getElementById("result").textContent = `${matches[0].name} さんの配置部署（候補）: ${deps.join(" / ")}`;
+        idInput.value = "";
+        idInput.readOnly = false;
       }
+      document.getElementById("idcardContainer").style.display="block";
+
+      return emp;
     }
 
-    // Enter キーで送信できるように
-    document.getElementById("nameInput").addEventListener("keypress", function(e){
-      if(e.key === "Enter"){
-        e.preventDefault();
-        searchDept();
-      }
-    });
-    document.getElementById("submitBtn").addEventListener("click", searchDept);
+    function goToGoogleForm(){
+      const emp = searchDept();
+      if(!emp) return;
 
-    // 初回ロード
+      let url = googleFormBaseUrl + encodeURIComponent(emp.name);
+
+      const idValue = document.getElementById("idcardInput").value.trim();
+      if(idValue){
+        url += "&entry." + entryIdCard + "=" + encodeURIComponent(idValue);
+      }
+
+      if(emp.department){
+        url += "&entry." + entryDepartment + "=" + encodeURIComponent(emp.department);
+      }
+
+      window.location.href = url;
+    }
+
+    document.getElementById("submitBtn").addEventListener("click", goToGoogleForm);
+    document.getElementById("nameInput").addEventListener("keypress", e=>{
+      if(e.key==="Enter"){ e.preventDefault(); goToGoogleForm(); }
+    });
+
     loadCsv();
   </script>
 </body>
